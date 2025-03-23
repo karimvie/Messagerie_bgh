@@ -1,0 +1,7 @@
+From: MAIL FROM:test@localhost
+To: user1@localhost, user2@localhost
+Date: Sun, 23 Mar 2025 08:51:44 +0100
+Subject: Test Email
+
+subject test email
+this is ea test for multiple recipients 

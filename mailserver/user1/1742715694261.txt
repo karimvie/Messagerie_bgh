@@ -1,0 +1,6 @@
+From: sender@localhost
+To: user1@localhost
+Date: Sun Mar 23 08:41:34 CET 2025
+
+test for user 1
+ghello user1

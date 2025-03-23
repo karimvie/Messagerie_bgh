@@ -1,0 +1,6 @@
+From: test@localhost
+To: user@localhost
+Date: Sun, 23 Mar 2025 08:53:06 +0100
+Subject: Test Email
+
+this is a new email test
