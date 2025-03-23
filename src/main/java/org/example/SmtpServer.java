@@ -105,6 +105,11 @@ class SmtpSession extends Thread {
                         break;
                 }
             }
+            // Si la boucle se termine alors que nous étions en train de recevoir les données,
+            // cela signifie que la connexion a été interrompue avant la réception du point final.
+            if (state == SmtpState.DATA_RECEIVING) {
+                System.err.println("Connection interrupted during DATA phase. Email incomplete, not stored.");
+            }
         } catch (IOException e) {
             e.printStackTrace();
         } finally {
@@ -121,15 +126,18 @@ class SmtpSession extends Thread {
     }
 
     private void handleMailFrom(String arg) {
-        if (state != SmtpState.HELO_RECEIVED) {
-            out.println("503 Bad sequence of commands");
-            return;
-        }
-        if (!arg.toUpperCase().startsWith("FROM:")) {
+        // Vérifier que l'argument correspond exactement au format "FROM:<email>"
+        // L'expression régulière vérifie que la chaîne commence par "FROM:", suivie de zéro ou plusieurs espaces,
+        // puis d'une adresse email entre chevrons et rien d'autre.
+        if (!arg.toUpperCase().matches("^FROM:\\s*<[^>]+>$")) {
             out.println("501 Syntax error in parameters or arguments");
             return;
         }
-        String potentialEmail = arg.substring(5).trim();
+        // Extraire l'adresse email en retirant "FROM:" et les chevrons.
+        String potentialEmail = arg.substring(5).trim();  // Extrait ce qui suit "FROM:"
+        // Retirer les chevrons (< et >)
+        potentialEmail = potentialEmail.substring(1, potentialEmail.length() - 1).trim();
+
         String email = extractEmail(potentialEmail);
         if (email == null) {
             out.println("501 Syntax error in parameters or arguments");

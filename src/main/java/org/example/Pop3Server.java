@@ -5,6 +5,8 @@ import java.util.*;
 
 public class Pop3Server {
     private static final int PORT = 1100; // Custom port to avoid conflicts
+    private List<File> emails;
+    private List<Boolean> deletionFlags = new ArrayList<>();
 
     public static void main(String[] args) {
         try (ServerSocket serverSocket = new ServerSocket(PORT)) {
@@ -18,6 +20,8 @@ public class Pop3Server {
             e.printStackTrace();
         }
     }
+
+
 }
 
 class Pop3Session extends Thread {
@@ -28,6 +32,8 @@ class Pop3Session extends Thread {
     private File userDir;
     private List<File> emails;
     private boolean authenticated;
+    private List<Boolean> deletionFlags; // Déclaration correcte
+
 
     public Pop3Session(Socket socket) {
         this.socket = socket;
@@ -49,7 +55,7 @@ class Pop3Session extends Thread {
                 String command = parts[0].toUpperCase();
                 String argument = parts.length > 1 ? parts[1] : "";
 
-                switch (command) {
+                switch (command.toUpperCase()) {
                     case "USER":
                         handleUser(argument);
                         break;
@@ -68,16 +74,24 @@ class Pop3Session extends Thread {
                     case "DELE":
                         handleDele(argument);
                         break;
+                    case "RSET":
+                        handleRset();
+                        break;
                     case "QUIT":
                         handleQuit();
-                        return;
+                        return; // Terminer la session
                     default:
                         out.println("-ERR Unknown command");
                         break;
                 }
+
+            }
+            // Si la boucle se termine, cela signifie que la connexion a été interrompue sans QUIT.
+            if (authenticated) {
+                System.err.println("La connexion a été interrompue sans recevoir QUIT. Les suppressions marquées ne seront pas appliquées.");
             }
         } catch (IOException e) {
-            e.printStackTrace();
+            System.err.println("Erreur lors de la lecture de la connexion : " + e.getMessage());
         } finally {
             try { socket.close(); } catch (IOException e) { /* Ignore */ }
         }
@@ -99,10 +113,24 @@ class Pop3Session extends Thread {
             out.println("-ERR USER required first");
             return;
         }
+        // Pour simplifier, on suppose que "userDir" est le dossier de l'utilisateur déjà défini
         authenticated = true;
-        emails = Arrays.asList(userDir.listFiles());
+        // Chargez les fichiers du répertoire dans une ArrayList mutable
+        File[] files = userDir.listFiles();
+        if (files == null) {
+            emails = new ArrayList<>();
+        } else {
+            emails = new ArrayList<>(Arrays.asList(files));
+        }
+        // Initialisez les flags de suppression : aucun email n'est marqué (false)
+        deletionFlags = new ArrayList<>();
+        for (int i = 0; i < emails.size(); i++) {
+            deletionFlags.add(false);
+        }
         out.println("+OK Password accepted");
     }
+
+
 
     private void handleStat() {
         if (!authenticated) {
@@ -156,25 +184,58 @@ class Pop3Session extends Thread {
             return;
         }
         try {
-            int index = Integer.parseInt(arg) - 1;
+            arg = arg.trim();
+            int index = Integer.parseInt(arg) - 1; // Les messages sont numérotés à partir de 1
             if (index < 0 || index >= emails.size()) {
                 out.println("-ERR No such message");
                 return;
             }
-            File emailFile = emails.get(index);
-            if (emailFile.delete()) {
-                emails.remove(index);
-                out.println("+OK Message deleted");
-            } else {
-                out.println("-ERR Unable to delete message");
+            // Vérifier si le message est déjà marqué pour suppression
+            if (deletionFlags.get(index)) {
+                out.println("-ERR Message already marked for deletion");
+                return;
             }
+            // Marquer le message pour suppression (ne pas le supprimer tout de suite)
+            deletionFlags.set(index, true);
+            out.println("+OK Message marked for deletion");
+        } catch (NumberFormatException nfe) {
+            out.println("-ERR Invalid message number");
         } catch (Exception e) {
             out.println("-ERR Invalid message number");
         }
     }
+    private void handleRset() {
+        if (!authenticated) {
+            out.println("-ERR Authentication required");
+            return;
+        }
+        // Remise à zéro de tous les flags de suppression
+        for (int i = 0; i < deletionFlags.size(); i++) {
+            deletionFlags.set(i, false);
+        }
+        out.println("+OK Deletion marks reset");
+    }
+
+
+
 
     private void handleQuit() {
+        // Pour chaque email marqué pour suppression, supprimez le fichier
+        for (int i = deletionFlags.size() - 1; i >= 0; i--) {
+            if (deletionFlags.get(i)) {
+                File emailFile = emails.get(i);
+                if (emailFile.delete()) {
+                    System.out.println("Deleted email: " + emailFile.getAbsolutePath());
+                    // Optionnel : vous pouvez retirer l'email de la liste
+                    emails.remove(i);
+                    deletionFlags.remove(i);
+                } else {
+                    System.err.println("Failed to delete email: " + emailFile.getAbsolutePath());
+                }
+            }
+        }
         out.println("+OK POP3 server signing off");
     }
+
 }
 
