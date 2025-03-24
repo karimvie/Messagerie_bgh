@@ -1,21 +1,22 @@
 package org.example;
+
 import java.io.*;
 import java.net.*;
 import java.text.SimpleDateFormat;
 import java.util.*;
+import java.rmi.registry.LocateRegistry;
+import java.rmi.registry.Registry;
 
 public class SmtpServer {
-    // Use a custom port (e.g., 2525) to avoid needing special privileges.
-    private static final int PORT = 25;
+    // Use a custom port (2525) to avoid needing privileged ports.
+    private static final int PORT = 2525;
 
     public static void main(String[] args) {
         try (ServerSocket serverSocket = new ServerSocket(PORT)) {
             System.out.println("SMTP Server started on port " + PORT);
-            // Continuously accept new client connections
             while (true) {
                 Socket clientSocket = serverSocket.accept();
                 System.out.println("Connection from " + clientSocket.getInetAddress());
-                // Handle each connection in its own thread
                 new SmtpSession(clientSocket).start();
             }
         } catch (IOException e) {
@@ -29,23 +30,26 @@ class SmtpSession extends Thread {
     private BufferedReader in;
     private PrintWriter out;
 
-    // Finite state machine for the SMTP session
+    // SMTP session states
     private enum SmtpState {
-        CONNECTED,    // Connection established; waiting for HELO/EHLO.
-        HELO_RECEIVED, // HELO/EHLO received; ready for MAIL FROM.
-        MAIL_FROM_SET, // MAIL FROM command processed; ready for RCPT TO.
-        RCPT_TO_SET,   // At least one RCPT TO received; ready for DATA.
-        DATA_RECEIVING // DATA command received; reading email content.
+        NOT_AUTHENTICATED,  // New connection, waiting for AUTH command.
+        AUTHENTICATED,      // Authentication successful, waiting for HELO/EHLO.
+        HELO_RECEIVED,      // HELO/EHLO received; ready for MAIL FROM.
+        MAIL_FROM_SET,      // MAIL FROM processed; ready for RCPT TO.
+        RCPT_TO_SET,        // At least one RCPT TO received; ready for DATA.
+        DATA_RECEIVING      // DATA command received; reading email content.
     }
 
     private SmtpState state;
+    private String authUsername; // Set after successful AUTH command.
     private String sender;
     private List<String> recipients;
     private StringBuilder dataBuffer;
 
     public SmtpSession(Socket socket) {
         this.socket = socket;
-        this.state = SmtpState.CONNECTED;
+        // Start with authentication required
+        this.state = SmtpState.NOT_AUTHENTICATED;
         this.recipients = new ArrayList<>();
         this.dataBuffer = new StringBuilder();
     }
@@ -55,35 +59,25 @@ class SmtpSession extends Thread {
         try {
             in  = new BufferedReader(new InputStreamReader(socket.getInputStream()));
             out = new PrintWriter(socket.getOutputStream(), true);
-
-            // Send initial greeting (RFC 5321 specifies a 220 response)
-            out.println("220 smtp.example.com Service Ready");
+            // Initial greeting includes a note to authenticate.
+            out.println("220 smtp.example.com Service Ready. Please authenticate using: AUTH <username> <password>");
 
             String line;
             while ((line = in.readLine()) != null) {
                 System.out.println("Received: " + line);
-                // If we are in DATA receiving state, accumulate message lines
-                if (state == SmtpState.DATA_RECEIVING) {
-                    // End of DATA input is signaled by a single dot on a line.
-                    if (line.equals(".")) {
-                        // Store the email and reset for next message.
-                        storeEmail(dataBuffer.toString());
-                        dataBuffer.setLength(0);
-                        // After DATA, we allow additional RCPT TO commands for new messages,
-                        // or can reset to HELO_RECEIVED depending on design.
-                        state = SmtpState.HELO_RECEIVED;
-                        out.println("250 OK: Message accepted for delivery");
-                    } else {
-                        dataBuffer.append(line).append("\r\n");
-                    }
-                    continue;
-                }
-
-                // Process commands outside of DATA state.
                 String command = extractToken(line).toUpperCase();
                 String argument = extractArgument(line);
 
+                // If not authenticated, only allow AUTH command.
+                if (state == SmtpState.NOT_AUTHENTICATED && !command.equals("AUTH")) {
+                    out.println("530 Authentication required");
+                    continue;
+                }
+
                 switch (command) {
+                    case "AUTH":
+                        handleAuth(argument);
+                        break;
                     case "HELO":
                     case "EHLO":
                         handleHelo(argument);
@@ -104,21 +98,55 @@ class SmtpSession extends Thread {
                         out.println("500 Command unrecognized");
                         break;
                 }
+
+                // If we're in DATA receiving state, accumulate message lines.
+                if (state == SmtpState.DATA_RECEIVING) {
+                    if (line.equals(".")) {
+                        storeEmail(dataBuffer.toString());
+                        dataBuffer.setLength(0);
+                        state = SmtpState.HELO_RECEIVED;
+                        out.println("250 OK: Message accepted for delivery");
+                    } else {
+                        dataBuffer.append(line).append("\r\n");
+                    }
+                }
             }
-            // Si la boucle se termine alors que nous étions en train de recevoir les données,
-            // cela signifie que la connexion a été interrompue avant la réception du point final.
             if (state == SmtpState.DATA_RECEIVING) {
                 System.err.println("Connection interrupted during DATA phase. Email incomplete, not stored.");
             }
         } catch (IOException e) {
             e.printStackTrace();
         } finally {
-            try { socket.close(); } catch (IOException e) { /* ignore */ }
+            try { socket.close(); } catch (IOException e) { }
+        }
+    }
+
+    private void handleAuth(String arg) {
+        // Expected format: "username password"
+        String[] tokens = arg.split("\\s+");
+        if (tokens.length != 2) {
+            out.println("501 Syntax error. Use: AUTH <username> <password>");
+            return;
+        }
+        String user = tokens[0];
+        String pass = tokens[1];
+        try {
+            Registry registry = LocateRegistry.getRegistry("localhost", 1099);
+            AuthService authService = (AuthService) registry.lookup("AuthService");
+            if (authService.authenticate(user, pass)) {
+                state = SmtpState.AUTHENTICATED;
+                authUsername = user;
+                out.println("235 Authentication successful");
+            } else {
+                out.println("535 Authentication credentials invalid");
+            }
+        } catch (Exception e) {
+            out.println("454 Temporary authentication failure");
+            e.printStackTrace();
         }
     }
 
     private void handleHelo(String arg) {
-        // Reset any previous session data
         state = SmtpState.HELO_RECEIVED;
         sender = "";
         recipients.clear();
@@ -126,21 +154,21 @@ class SmtpSession extends Thread {
     }
 
     private void handleMailFrom(String arg) {
-        // Vérifier que l'argument correspond exactement au format "FROM:<email>"
-        // L'expression régulière vérifie que la chaîne commence par "FROM:", suivie de zéro ou plusieurs espaces,
-        // puis d'une adresse email entre chevrons et rien d'autre.
         if (!arg.toUpperCase().matches("^FROM:\\s*<[^>]+>$")) {
             out.println("501 Syntax error in parameters or arguments");
             return;
         }
-        // Extraire l'adresse email en retirant "FROM:" et les chevrons.
-        String potentialEmail = arg.substring(5).trim();  // Extrait ce qui suit "FROM:"
-        // Retirer les chevrons (< et >)
+        String potentialEmail = arg.substring(5).trim();  // after "FROM:"
         potentialEmail = potentialEmail.substring(1, potentialEmail.length() - 1).trim();
-
         String email = extractEmail(potentialEmail);
         if (email == null) {
             out.println("501 Syntax error in parameters or arguments");
+            return;
+        }
+        // Check if the authenticated user matches the sender's local part.
+        String localPart = email.split("@")[0];
+        if (!localPart.equalsIgnoreCase(authUsername)) {
+            out.println("550 Sender not authorized. Use the authenticated username.");
             return;
         }
         sender = email;
@@ -163,20 +191,8 @@ class SmtpSession extends Thread {
             out.println("501 Syntax error in parameters or arguments");
             return;
         }
-
-        // Check if the recipient's directory exists.
-        // The user directory is assumed to be "mailserver/username" where username is the part before '@'.
-        String username = email.split("@")[0];
-        File userDir = new File(System.getProperty("user.dir") + "/mailserver/" + username);
-        if (!userDir.exists()) {
-            boolean created = userDir.mkdirs();  // Create user directory
-            if (!created) {
-                out.println("550 Failed to create user directory");
-                return;
-            }
-        }
-
-
+        // For simplicity, you can decide whether to restrict RCPT TO to the authenticated user.
+        // Here we allow any recipient (or you can enforce that RCPT TO equals authUsername).
         recipients.add(email);
         state = SmtpState.RCPT_TO_SET;
         out.println("250 OK");
@@ -207,9 +223,8 @@ class SmtpSession extends Thread {
         return index > 0 ? line.substring(index).trim() : "";
     }
 
-    // Simple email extraction: removes angle brackets and performs a basic validation.
+    // Basic email extraction that removes angle brackets and validates the format.
     private String extractEmail(String input) {
-        // Remove any surrounding angle brackets.
         input = input.replaceAll("[<>]", "");
         if (input.contains("@") && input.indexOf("@") > 0 && input.indexOf("@") < input.length() - 1) {
             return input;
@@ -217,44 +232,25 @@ class SmtpSession extends Thread {
         return null;
     }
 
-    // Store the email for each recipient in the corresponding user directory.
-    // Files are named using the current timestamp.
-
+    // Store the email in the authenticated user's directory.
     private void storeEmail(String data) {
-        // Use a readable timestamp format (YYYYMMDD_HHMMSS)
         String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
-
-        for (String recipient : recipients) {
-            // Extract username (before @)
-            String username = recipient.split("@")[0];
-
-            // Define user directory path
-            File userDir = new File("mailserver/" + username);
-
-            // Ensure the directory exists
-            if (!userDir.exists()) {
-                userDir.mkdirs();  // Create if missing
-            }
-
-            // Define email file path
-            File emailFile = new File(userDir, timestamp + ".txt");
-
-            // Write email content
-            try (PrintWriter writer = new PrintWriter(new FileWriter(emailFile))) {
-                // Basic email headers (RFC 5322)
-                writer.println("From: " + sender);
-                writer.println("To: " + String.join(", ", recipients));
-                writer.println("Date: " + new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss Z").format(new Date()));
-                writer.println("Subject: Test Email");
-                writer.println();
-                writer.print(data);
-
-                // Log success
-                System.out.println(" Stored email for " + recipient + " in " + emailFile.getAbsolutePath());
-            } catch (IOException e) {
-                System.err.println(" Error storing email: " + e.getMessage());
-            }
+        // The mail directory for the sender is assumed to be "mailserver/<authUsername>"
+        File userDir = new File("mailserver/" + authUsername);
+        if (!userDir.exists()) {
+            userDir.mkdirs();
+        }
+        File emailFile = new File(userDir, timestamp + ".txt");
+        try (PrintWriter writer = new PrintWriter(new FileWriter(emailFile))) {
+            writer.println("From: " + sender);
+            writer.println("To: " + String.join(", ", recipients));
+            writer.println("Date: " + new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss Z").format(new Date()));
+            writer.println("Subject: Test Email");
+            writer.println();
+            writer.print(data);
+            System.out.println("Stored email for " + authUsername + " in " + emailFile.getAbsolutePath());
+        } catch (IOException e) {
+            System.err.println("Error storing email: " + e.getMessage());
         }
     }
 }
-
