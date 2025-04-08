@@ -1,5 +1,5 @@
 package org.example;
-
+import java.sql.*;
 import java.io.*;
 import java.net.*;
 import java.text.SimpleDateFormat;
@@ -75,9 +75,6 @@ class SmtpSession extends Thread {
                 }
 
                 switch (command) {
-                    case "AUTH":
-                        handleAuth(argument);
-                        break;
                     case "HELO":
                     case "EHLO":
                         handleHelo(argument);
@@ -158,45 +155,67 @@ class SmtpSession extends Thread {
             out.println("501 Syntax error in parameters or arguments");
             return;
         }
-        String potentialEmail = arg.substring(5).trim();  // after "FROM:"
-        potentialEmail = potentialEmail.substring(1, potentialEmail.length() - 1).trim();
+
+        String potentialEmail = arg.substring(5).trim(); // after "FROM:"
+        potentialEmail = potentialEmail.substring(1, potentialEmail.length() - 1).trim(); // strip < >
         String email = extractEmail(potentialEmail);
+
         if (email == null) {
             out.println("501 Syntax error in parameters or arguments");
             return;
         }
-        // Check if the authenticated user matches the sender's local part.
+
         String localPart = email.split("@")[0];
+
+        // Check that the sender exists in the database
+        if (!userExistsInDatabase(localPart)) {
+            out.println("550 Sender not recognized");
+            return;
+        }
+
+        // Ensure the sender is the authenticated user
         if (!localPart.equalsIgnoreCase(authUsername)) {
             out.println("550 Sender not authorized. Use the authenticated username.");
             return;
         }
+
         sender = email;
         state = SmtpState.MAIL_FROM_SET;
         out.println("250 OK");
     }
+
 
     private void handleRcptTo(String arg) {
         if (state != SmtpState.MAIL_FROM_SET && state != SmtpState.RCPT_TO_SET) {
             out.println("503 Bad sequence of commands");
             return;
         }
+
         if (!arg.toUpperCase().startsWith("TO:")) {
             out.println("501 Syntax error in parameters or arguments");
             return;
         }
+
         String potentialEmail = arg.substring(3).trim();
         String email = extractEmail(potentialEmail);
         if (email == null) {
             out.println("501 Syntax error in parameters or arguments");
             return;
         }
-        // For simplicity, you can decide whether to restrict RCPT TO to the authenticated user.
-        // Here we allow any recipient (or you can enforce that RCPT TO equals authUsername).
+
+        String localPart = email.split("@")[0];
+
+        // Check if the recipient exists
+        if (!userExistsInDatabase(localPart)) {
+            out.println("550 Recipient address not found");
+            return;
+        }
+
         recipients.add(email);
         state = SmtpState.RCPT_TO_SET;
         out.println("250 OK");
     }
+
 
     private void handleData() {
         if (state != SmtpState.RCPT_TO_SET || recipients.isEmpty()) {
@@ -234,23 +253,54 @@ class SmtpSession extends Thread {
 
     // Store the email in the authenticated user's directory.
     private void storeEmail(String data) {
-        String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
-        // The mail directory for the sender is assumed to be "mailserver/<authUsername>"
-        File userDir = new File("mailserver/" + authUsername);
-        if (!userDir.exists()) {
-            userDir.mkdirs();
-        }
-        File emailFile = new File(userDir, timestamp + ".txt");
-        try (PrintWriter writer = new PrintWriter(new FileWriter(emailFile))) {
-            writer.println("From: " + sender);
-            writer.println("To: " + String.join(", ", recipients));
-            writer.println("Date: " + new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss Z").format(new Date()));
-            writer.println("Subject: Test Email");
-            writer.println();
-            writer.print(data);
-            System.out.println("Stored email for " + authUsername + " in " + emailFile.getAbsolutePath());
-        } catch (IOException e) {
-            System.err.println("Error storing email: " + e.getMessage());
+        // Connexion à la base de données MySQL (adapté pour XAMPP : username = "root", password = "")
+        String jdbcUrl = "jdbc:mysql://localhost:3306/maildb";
+        String dbUser = "root";
+        String dbPassword = ""; // par défaut sous XAMPP, il n'y a pas de mot de passe
+        String sql = "INSERT INTO emails (sender, recipients, subject, content, date_sent, recipient) VALUES (?, ?, ?, ?, ?, ?)";
+
+        try (Connection con = DriverManager.getConnection(jdbcUrl, dbUser, dbPassword);
+             PreparedStatement pst = con.prepareStatement(sql)) {
+
+            // Pour cet exemple, nous fixons le sujet à "Test Email".
+            pst.setString(1, sender);
+            pst.setString(2, String.join(", ", recipients));
+            pst.setString(3, "Test Email");  // idéalement extraire le sujet du contenu DATA
+            pst.setString(4, data);
+            pst.setTimestamp(5, new Timestamp(System.currentTimeMillis()));
+            // Pour simplifier, nous utilisons le premier destinataire comme identifiant pour la récupération
+            pst.setString(6, recipients.get(0));
+
+            int rowsAffected = pst.executeUpdate();
+            if (rowsAffected > 0) {
+                System.out.println("Email stored in database successfully.");
+                out.println("250 OK: Message accepted for delivery");
+            } else {
+                System.out.println("Failed to store email in database.");
+                out.println("550 Failed to store email");
+            }
+        } catch (SQLException ex) {
+            ex.printStackTrace();
+            out.println("550 Failed to store email");
         }
     }
+    private boolean userExistsInDatabase(String username) {
+        String jdbcUrl = "jdbc:mysql://localhost:3306/maildb?serverTimezone=UTC";
+        String dbUser = "root";
+        String dbPassword = "";
+        String sql = "SELECT * FROM users WHERE username = ?";
+
+        try (Connection con = DriverManager.getConnection(jdbcUrl, dbUser, dbPassword);
+             PreparedStatement stmt = con.prepareStatement(sql)) {
+
+            stmt.setString(1, username);
+            ResultSet rs = stmt.executeQuery();
+            return rs.next(); // true if user exists
+
+        } catch (SQLException e) {
+            System.err.println("Database error during user existence check: " + e.getMessage());
+            return false;
+        }
+    }
+
 }

@@ -1,6 +1,12 @@
 package org.example;
 
-
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
 import java.rmi.server.UnicastRemoteObject;
 import java.rmi.RemoteException;
 import java.io.*;
@@ -20,37 +26,112 @@ public class AuthServiceImpl extends UnicastRemoteObject implements AuthService 
     }
 
     @Override
-    public synchronized boolean authenticate(String username, String password) throws RemoteException {
-        String storedPassword = accounts.get(username);
-        return storedPassword != null && storedPassword.equals(password);
-    }
+    public boolean authenticate(String username, String password) {
+        String jdbcUrl = "jdbc:mysql://localhost:3306/maildb";
+        String dbUser = "root";
+        String dbPassword = "";
+        String sql = "SELECT * FROM users WHERE username = ? AND password = ?";  // Pour plus de sécurité, utilisez un hash
+        try (Connection con = DriverManager.getConnection(jdbcUrl, dbUser, dbPassword);
+             PreparedStatement pst = con.prepareStatement(sql)) {
 
-    @Override
-    public synchronized boolean createUser(String username, String password) throws RemoteException {
-        if (accounts.containsKey(username)) {
-            return false; // User already exists.
-        }
-        accounts.put(username, password);
-        return saveAccounts();
-    }
-
-    @Override
-    public synchronized boolean updateUser(String username, String newPassword) throws RemoteException {
-        if (!accounts.containsKey(username)) {
+            pst.setString(1, username);
+            pst.setString(2, password);
+            ResultSet rs = pst.executeQuery();
+            boolean authenticated = rs.next();
+            rs.close();
+            return authenticated;
+        } catch (SQLException ex) {
+            ex.printStackTrace();
             return false;
         }
-        accounts.put(username, newPassword);
-        return saveAccounts();
     }
 
+
     @Override
-    public synchronized boolean deleteUser(String username) throws RemoteException {
-        if (!accounts.containsKey(username)) {
+    public boolean createUser(String username, String password) {
+        String jdbcUrl = "jdbc:mysql://localhost:3306/maildb";
+        String dbUser = "root";
+        String dbPassword = "";  // Par défaut sous XAMPP
+        String sql = "INSERT INTO users (username, password) VALUES (?, ?)";
+
+        try (Connection con = DriverManager.getConnection(jdbcUrl, dbUser, dbPassword);
+             PreparedStatement pst = con.prepareStatement(sql)) {
+
+            pst.setString(1, username);
+            pst.setString(2, password);  // Pour la sécurité, il est recommandé d'utiliser un hash
+            int rowsAffected = pst.executeUpdate();
+
+            if (rowsAffected > 0) {
+                System.out.println("User " + username + " created successfully.");
+                return true;
+            } else {
+                System.out.println("Failed to create user " + username);
+                return false;
+            }
+        } catch (SQLException ex) {
+            ex.printStackTrace();
             return false;
         }
-        accounts.remove(username);
-        return saveAccounts();
     }
+
+
+    @Override
+    public boolean updateUser(String username, String newPassword) {
+        String jdbcUrl = "jdbc:mysql://localhost:3306/maildb?serverTimezone=UTC";
+        String dbUser = "root";
+        String dbPassword = ""; // XAMPP default
+        String sql = "UPDATE users SET password = ? WHERE username = ?";
+
+        System.out.println("Attempting to update user: " + username);
+        try (Connection con = DriverManager.getConnection(jdbcUrl, dbUser, dbPassword);
+             PreparedStatement stmt = con.prepareStatement(sql)) {
+
+            stmt.setString(1, newPassword);
+            stmt.setString(2, username);
+
+            int rowsAffected = stmt.executeUpdate();
+            if (rowsAffected > 0) {
+                System.out.println("User updated successfully.");
+                return true;
+            } else {
+                System.out.println("User not found.");
+                return false;
+            }
+        } catch (SQLException e) {
+            System.err.println("SQL Error during user update: " + e.getMessage());
+            return false;
+        }
+    }
+
+
+
+    @Override
+    public boolean deleteUser(String username) {
+        String jdbcUrl = "jdbc:mysql://localhost:3306/maildb?serverTimezone=UTC";
+        String dbUser = "root";
+        String dbPassword = ""; // XAMPP default
+        String sql = "DELETE FROM users WHERE username = ?";
+
+        System.out.println("Attempting to delete user: " + username);
+        try (Connection con = DriverManager.getConnection(jdbcUrl, dbUser, dbPassword);
+             PreparedStatement stmt = con.prepareStatement(sql)) {
+
+            stmt.setString(1, username);
+            int rowsAffected = stmt.executeUpdate();
+
+            if (rowsAffected > 0) {
+                System.out.println("User deleted successfully.");
+                return true;
+            } else {
+                System.out.println("User not found.");
+                return false;
+            }
+        } catch (SQLException e) {
+            System.err.println("SQL Error during user deletion: " + e.getMessage());
+            return false;
+        }
+    }
+
 
     // Helper to load accounts from a JSON file.
     private Map<String, String> loadAccounts() {

@@ -16,42 +16,63 @@ public class AuthClientGUI extends JFrame {
     private JTextArea outputArea;
 
     public AuthClientGUI() {
-        // Setup the GUI window
+        // Setup the GUI window with a more modern look
         setTitle("Authentication Client");
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        setSize(400, 350);
+        setSize(500, 400);
         setLocationRelativeTo(null);
         setLayout(new BorderLayout());
+        setResizable(false);  // Disable resizing for a more controlled layout
 
-        // Create panel for user inputs
-        JPanel inputPanel = new JPanel(new GridLayout(3, 2, 5, 5));
-        inputPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        // Set a custom background color
+        getContentPane().setBackground(new Color(240, 240, 240));
 
-        inputPanel.add(new JLabel("Username:"));
+        // Add a custom font to improve readability
+        Font labelFont = new Font("Arial", Font.PLAIN, 16);
+
+        // Create panel for user inputs with better layout
+        JPanel inputPanel = new JPanel();
+        inputPanel.setLayout(new BoxLayout(inputPanel, BoxLayout.Y_AXIS));
+        inputPanel.setBorder(BorderFactory.createEmptyBorder(20, 30, 20, 30));
+
+        // Username label and field
+        JLabel usernameLabel = new JLabel("Username:");
+        usernameLabel.setFont(labelFont);
+        inputPanel.add(usernameLabel);
         usernameField = new JTextField();
+        usernameField.setPreferredSize(new Dimension(300, 30));
         inputPanel.add(usernameField);
 
-        inputPanel.add(new JLabel("Password:"));
+        // Password label and field
+        JLabel passwordLabel = new JLabel("Password:");
+        passwordLabel.setFont(labelFont);
+        inputPanel.add(passwordLabel);
         passwordField = new JPasswordField();
+        passwordField.setPreferredSize(new Dimension(300, 30));
         inputPanel.add(passwordField);
 
-        // Create buttons panel
-        JPanel buttonPanel = new JPanel(new GridLayout(1, 4, 5, 5));
-        JButton createButton = new JButton("Create");
-        JButton updateButton = new JButton("Update");
-        JButton deleteButton = new JButton("Delete");
-        JButton authButton = new JButton("Authenticate");
+        // Create buttons panel with a more modern button layout
+        JPanel buttonPanel = new JPanel();
+        buttonPanel.setLayout(new FlowLayout(FlowLayout.CENTER, 20, 10));
+
+        // Use styled buttons with different colors
+        JButton createButton = createStyledButton("Create");
+        JButton updateButton = createStyledButton("Update");
+        JButton deleteButton = createStyledButton("Delete");
 
         buttonPanel.add(createButton);
         buttonPanel.add(updateButton);
         buttonPanel.add(deleteButton);
-        buttonPanel.add(authButton);
 
-        // Create output area for results
+        // Create output area for results with better scrolling and font
         outputArea = new JTextArea();
         outputArea.setEditable(false);
+        outputArea.setFont(new Font("Monospaced", Font.PLAIN, 14));
+        outputArea.setBackground(new Color(255, 255, 255));
         JScrollPane scrollPane = new JScrollPane(outputArea);
+        scrollPane.setPreferredSize(new Dimension(450, 150));
 
+        // Add panels to the frame
         add(inputPanel, BorderLayout.NORTH);
         add(buttonPanel, BorderLayout.CENTER);
         add(scrollPane, BorderLayout.SOUTH);
@@ -89,12 +110,19 @@ public class AuthClientGUI extends JFrame {
             }
         });
 
-        authButton.addActionListener(new ActionListener() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                performAuthenticate();
-            }
-        });
+;
+    }
+
+    private JButton createStyledButton(String text) {
+        JButton button = new JButton(text);
+        button.setFont(new Font("Arial", Font.BOLD, 14));
+        button.setPreferredSize(new Dimension(100, 40));
+        button.setBackground(new Color(65, 105, 225));  // Royal Blue color
+        button.setForeground(Color.WHITE);
+        button.setFocusPainted(false);
+        button.setCursor(new Cursor(Cursor.HAND_CURSOR));
+        button.setBorder(BorderFactory.createLineBorder(new Color(50, 90, 150), 2));
+        return button;
     }
 
     private void performCreate() {
