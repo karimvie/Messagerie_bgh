@@ -13,7 +13,67 @@
         <artifactId>gson</artifactId>
         <version>2.8.9</version>
     </dependency>
-    </dependencies>
+            <!-- Spring Boot dependencies -->
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-starter-web</artifactId>
+                <version>2.7.4</version>  <!-- Replace with your Spring Boot version -->
+            </dependency>
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-starter-data-jpa</artifactId>
+                <version>2.7.4</version>  <!-- Replace with your Spring Boot version -->
+            </dependency>
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-starter-security</artifactId>
+                <version>2.7.4</version>  <!-- Replace with your Spring Boot version -->
+            </dependency>
+        <dependency>
+            <groupId>mysql</groupId>
+            <artifactId>mysql-connector-java</artifactId>
+            <version>8.0.33</version> <!-- vérifie la dernière version stable -->
+        </dependency>
+            <!-- JWT Dependency -->
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-api</artifactId>
+            <version>0.11.5</version>
+        </dependency>
+
+        <!-- Implémentation (nécessaire à l'exécution) -->
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-impl</artifactId>
+            <version>0.11.5</version>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- Pour JSON via Jackson (ou remplace par jjwt-gson si tu préfères GSON) -->
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-jackson</artifactId>
+            <version>0.11.5</version>
+            <scope>runtime</scope>
+        </dependency>
+
+            <!-- H2 Database (for simplicity, you can replace this with MySQL or PostgreSQL) -->
+            <dependency>
+                <groupId>com.h2database</groupId>
+                <artifactId>h2</artifactId>
+                <version>1.4.200</version>  <!-- Replace with the latest H2 version -->
+                <scope>runtime</scope>
+            </dependency>
+
+            <!-- Spring Boot DevTools (optional for development) -->
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-devtools</artifactId>
+                <version>2.7.4</version>  <!-- Replace with your Spring Boot version -->
+                <scope>runtime</scope>
+            </dependency>
+        </dependencies>
+
     <properties>
         <maven.compiler.source>22</maven.compiler.source>
         <maven.compiler.target>22</maven.compiler.target>

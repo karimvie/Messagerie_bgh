@@ -1,12 +1,11 @@
 package org.example;
-
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.util.ArrayList;
-import java.util.List;
 import java.rmi.server.UnicastRemoteObject;
 import java.rmi.RemoteException;
 import java.io.*;
@@ -30,16 +29,24 @@ public class AuthServiceImpl extends UnicastRemoteObject implements AuthService 
         String jdbcUrl = "jdbc:mysql://localhost:3306/maildb";
         String dbUser = "root";
         String dbPassword = "";
-        String sql = "SELECT * FROM users WHERE username = ? AND password = ?";  // Pour plus de sécurité, utilisez un hash
+        String sql = "SELECT password_hash FROM users WHERE username = ?";
+
         try (Connection con = DriverManager.getConnection(jdbcUrl, dbUser, dbPassword);
              PreparedStatement pst = con.prepareStatement(sql)) {
 
             pst.setString(1, username);
-            pst.setString(2, password);
             ResultSet rs = pst.executeQuery();
-            boolean authenticated = rs.next();
-            rs.close();
-            return authenticated;
+
+            if (rs.next()) {
+                String storedHash = rs.getString("password_hash");
+                String inputHash = hashPassword(password);
+
+                rs.close();
+                return storedHash.equals(inputHash);
+            } else {
+                rs.close();
+                return false; // Username not found
+            }
         } catch (SQLException ex) {
             ex.printStackTrace();
             return false;
@@ -51,14 +58,18 @@ public class AuthServiceImpl extends UnicastRemoteObject implements AuthService 
     public boolean createUser(String username, String password) {
         String jdbcUrl = "jdbc:mysql://localhost:3306/maildb";
         String dbUser = "root";
-        String dbPassword = "";  // Par défaut sous XAMPP
-        String sql = "INSERT INTO users (username, password) VALUES (?, ?)";
+        String dbPassword = "";
+        String sql = "INSERT INTO users (username, password_clear, password_hash) VALUES (?, ?, ?)";
 
         try (Connection con = DriverManager.getConnection(jdbcUrl, dbUser, dbPassword);
              PreparedStatement pst = con.prepareStatement(sql)) {
 
+            String hashedPassword = hashPassword(password);
+
             pst.setString(1, username);
-            pst.setString(2, password);  // Pour la sécurité, il est recommandé d'utiliser un hash
+            pst.setString(2, password);  // store cleartext (for debugging, not recommended for prod)
+            pst.setString(3, hashedPassword);  // store hash for verification
+
             int rowsAffected = pst.executeUpdate();
 
             if (rowsAffected > 0) {
@@ -74,20 +85,38 @@ public class AuthServiceImpl extends UnicastRemoteObject implements AuthService 
         }
     }
 
+    private String hashPassword(String password) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] hash = md.digest(password.getBytes());
+            StringBuilder hexString = new StringBuilder();
+            for (byte b : hash) {
+                hexString.append(String.format("%02x", b));
+            }
+            return hexString.toString();
+        } catch (NoSuchAlgorithmException e) {
+            throw new RuntimeException("Error hashing password", e);
+        }
+    }
+
 
     @Override
+
     public boolean updateUser(String username, String newPassword) {
         String jdbcUrl = "jdbc:mysql://localhost:3306/maildb?serverTimezone=UTC";
         String dbUser = "root";
         String dbPassword = ""; // XAMPP default
-        String sql = "UPDATE users SET password = ? WHERE username = ?";
+        String sql = "UPDATE users SET password_clear = ?, password_hash = ? WHERE username = ?";
 
         System.out.println("Attempting to update user: " + username);
         try (Connection con = DriverManager.getConnection(jdbcUrl, dbUser, dbPassword);
              PreparedStatement stmt = con.prepareStatement(sql)) {
 
-            stmt.setString(1, newPassword);
-            stmt.setString(2, username);
+            String hashedPassword = hashPassword(newPassword);
+
+            stmt.setString(1, newPassword);         // plain password (for testing/dev)
+            stmt.setString(2, hashedPassword);      // hashed password
+            stmt.setString(3, username);            // where clause
 
             int rowsAffected = stmt.executeUpdate();
             if (rowsAffected > 0) {
@@ -102,6 +131,8 @@ public class AuthServiceImpl extends UnicastRemoteObject implements AuthService 
             return false;
         }
     }
+
+
 
 
 

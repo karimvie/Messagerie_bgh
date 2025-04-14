@@ -1,4 +1,6 @@
 package org.example;
+
+import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
@@ -153,9 +155,36 @@ class Pop3Session extends Thread {
             out.println("-ERR Authentication required");
             return;
         }
-        long totalSize = emails.stream().mapToLong(File::length).sum();
-        out.println("+OK " + emails.size() + " " + totalSize);
+
+        int emailCount = 0;
+        long totalSize = 0;
+
+        String jdbcUrl = "jdbc:mysql://localhost:3306/maildb?serverTimezone=UTC";
+        String dbUser = "root";
+        String dbPassword = "";
+        String sql = "SELECT content FROM emails WHERE recipient_email = ?";
+
+        try (Connection con = DriverManager.getConnection(jdbcUrl, dbUser, dbPassword);
+             PreparedStatement pst = con.prepareStatement(sql)) {
+
+            // Construct the full recipient email address
+            String recipientEmail = username + "@example.com";  // Change domain if needed
+            pst.setString(1, recipientEmail);
+
+            ResultSet rs = pst.executeQuery();
+            while (rs.next()) {
+                String content = rs.getString("content");
+                totalSize += content.getBytes(StandardCharsets.UTF_8).length;
+                emailCount++;
+            }
+
+            out.println("+OK " + emailCount + " " + totalSize);
+        } catch (SQLException ex) {
+            ex.printStackTrace();
+            out.println("-ERR Could not retrieve email statistics");
+        }
     }
+
 
     private void handleList() {
         if (!authenticated) {
@@ -163,45 +192,38 @@ class Pop3Session extends Thread {
             return;
         }
 
-        // Construct the recipient in the form of "username@example.com"
-        String recipient = username + "@example.com";  // Assuming the domain is always "example.com"
+        String recipientEmail = username + "@example.com";  // Adjust domain if needed
 
-        // Define the SQL query to find emails where the recipient matches the authenticated user
         String jdbcUrl = "jdbc:mysql://localhost:3306/maildb";
         String dbUser = "root";
         String dbPassword = "";
-        String sql = "SELECT id, LENGTH(content) AS size FROM emails WHERE recipient = ?";
+        String sql = "SELECT LENGTH(content) AS size FROM emails WHERE recipient_email = ? ORDER BY date_sent ASC";
 
         try (Connection con = DriverManager.getConnection(jdbcUrl, dbUser, dbPassword);
              PreparedStatement pst = con.prepareStatement(sql)) {
 
-            // Set the recipient for the query
-            pst.setString(1, recipient);
-
-            // Execute the query and process the results
+            pst.setString(1, recipientEmail);
             ResultSet rs = pst.executeQuery();
 
             List<String> lines = new ArrayList<>();
-            int count = 0;
+            int index = 1;
             int totalSize = 0;
 
             while (rs.next()) {
-                count++;
                 int size = rs.getInt("size");
                 totalSize += size;
-                lines.add(rs.getString("id") + " " + size);  // Add the email ID as a string
+                lines.add(index + " " + size);  // Use sequence number, not DB ID
+                index++;
             }
 
-            // If no emails are found, return a message indicating no messages
-            if (count == 0) {
+            if (lines.isEmpty()) {
                 out.println("-ERR No messages found.");
             } else {
-                // If there are emails, return the number of messages and total size
-                out.println("+OK " + count + " " + totalSize);
+                out.println("+OK " + lines.size() + " " + totalSize);
                 for (String line : lines) {
                     out.println(line);
                 }
-                out.println(".");  // End of response
+                out.println(".");  // End of multi-line response
             }
 
             rs.close();
@@ -214,40 +236,59 @@ class Pop3Session extends Thread {
 
 
 
+
+
     private void handleRetr(String msgId) {
         if (!authenticated) {
             out.println("-ERR Authentication required");
             return;
         }
 
+        int index;
+        try {
+            index = Integer.parseInt(msgId) - 1;  // Convert to 0-based index
+            if (index < 0) {
+                out.println("-ERR Invalid message number");
+                return;
+            }
+        } catch (NumberFormatException e) {
+            out.println("-ERR Invalid message number format");
+            return;
+        }
+
+        String recipientEmail = username + "@example.com";
         String jdbcUrl = "jdbc:mysql://localhost:3306/maildb";
         String dbUser = "root";
         String dbPassword = "";
-        String sql = "SELECT content FROM emails WHERE recipient = ? AND id = ?";
+
+        String sql = "SELECT subject, content FROM emails WHERE recipient_email = ? AND is_deleted = 0 ORDER BY date_sent ASC";
 
         try (Connection con = DriverManager.getConnection(jdbcUrl, dbUser, dbPassword);
              PreparedStatement pst = con.prepareStatement(sql)) {
 
-            // Construct the recipient in the form of "username@example.com"
-            String recipient = username + "@example.com";  // Assuming the domain is always "example.com"
-
-            // Set the recipient and message ID for the query
-            pst.setString(1, recipient);
-            pst.setString(2, msgId);  // Use msgId as a string
-
-            // Execute the query and process the result
+            pst.setString(1, recipientEmail);
             ResultSet rs = pst.executeQuery();
 
-            if (rs.next()) {
-                // Successfully found the email, retrieve the content
-                String content = rs.getString("content");
-                out.println("+OK " + content.length() + " octets");
-                out.println(content);
-                out.println(".");
-            } else {
-                // Email with the specified ID not found
-                out.println("-ERR No such message");
+            List<String> messages = new ArrayList<>();
+            List<String> subjects = new ArrayList<>();
+
+            while (rs.next()) {
+                subjects.add(rs.getString("subject"));
+                messages.add(rs.getString("content"));
             }
+
+            if (index >= messages.size()) {
+                out.println("-ERR No such message");
+                return;
+            }
+
+            String subject = subjects.get(index);
+            String content = messages.get(index);
+            String fullMessage = "Subject: " + subject + "\r\n" + content;
+
+            out.println("+OK " + fullMessage.length() + " octets");
+            out.println(fullMessage);
+            out.println(".");
 
             rs.close();
         } catch (SQLException ex) {
@@ -259,7 +300,77 @@ class Pop3Session extends Thread {
 
 
 
-    private void handleDele(String arg) {
+
+
+    private void handleDele(String msgId) {
+        if (!authenticated) {
+            out.println("-ERR Authentication required");
+            return;
+        }
+
+        int index;
+        try {
+            index = Integer.parseInt(msgId) - 1;  // Convert to 0-based index
+            if (index < 0) {
+                out.println("-ERR Invalid message number");
+                return;
+            }
+        } catch (NumberFormatException e) {
+            out.println("-ERR Invalid message number format");
+            return;
+        }
+
+        // Construct the recipient email (e.g., username@example.com)
+        String recipientEmail = username + "@example.com";
+        String jdbcUrl = "jdbc:mysql://localhost:3306/maildb";
+        String dbUser = "root";
+        String dbPassword = "";
+
+        String sql = "SELECT id FROM emails WHERE recipient_email = ? AND is_deleted = 0 ORDER BY date_sent ASC";
+
+        try (Connection con = DriverManager.getConnection(jdbcUrl, dbUser, dbPassword);
+             PreparedStatement pst = con.prepareStatement(sql)) {
+
+            pst.setString(1, recipientEmail);
+            ResultSet rs = pst.executeQuery();
+
+            List<Integer> emailIds = new ArrayList<>();
+            while (rs.next()) {
+                emailIds.add(rs.getInt("id"));
+            }
+
+            if (index >= emailIds.size()) {
+                out.println("-ERR No such message");
+                return;
+            }
+
+            int messageId = emailIds.get(index);
+
+            // Soft delete the email by updating 'is_deleted' field
+            String deleteSql = "UPDATE emails SET is_deleted = 1 WHERE id = ? AND recipient_email = ?";
+            try (PreparedStatement deletePst = con.prepareStatement(deleteSql)) {
+                deletePst.setInt(1, messageId);
+                deletePst.setString(2, recipientEmail);
+                int rowsAffected = deletePst.executeUpdate();
+
+                if (rowsAffected > 0) {
+                    out.println("+OK Message marked for deletion");
+                } else {
+                    out.println("-ERR No such message");
+                }
+            }
+
+            rs.close();
+        } catch (SQLException ex) {
+            ex.printStackTrace();
+            out.println("-ERR Server error during message deletion");
+        }
+    }
+
+
+
+
+    private void handleRset() {
         if (!authenticated) {
             out.println("-ERR Authentication required");
             return;
@@ -268,70 +379,75 @@ class Pop3Session extends Thread {
         String jdbcUrl = "jdbc:mysql://localhost:3306/maildb";
         String dbUser = "root";
         String dbPassword = "";
-        String sql = "DELETE FROM emails WHERE id = ? AND recipient = ?";
+
+        String sql = "UPDATE emails SET is_deleted = 0 WHERE recipient_email = ? AND is_deleted = 1";
 
         try (Connection con = DriverManager.getConnection(jdbcUrl, dbUser, dbPassword);
              PreparedStatement pst = con.prepareStatement(sql)) {
 
-            int id = Integer.parseInt(arg);
-            pst.setInt(1, id);
-            pst.setString(2, username + "@localhost");
+            String recipientEmail = username + "@example.com";  // Assuming this format
+            pst.setString(1, recipientEmail);
             int rowsAffected = pst.executeUpdate();
-            if (rowsAffected > 0) {
-                out.println("+OK Message deleted");
-            } else {
-                out.println("-ERR No such message");
-            }
-        } catch (SQLException | NumberFormatException ex) {
-            ex.printStackTrace();
-            out.println("-ERR Unable to delete message");
+
+            out.println("+OK Reset deletion flags on " + rowsAffected + " message(s)");
+        } catch (SQLException e) {
+            e.printStackTrace();
+            out.println("-ERR Failed to reset deletion flags");
         }
     }
 
-
-    private void handleRset() {
-        if (!authenticated) {
-            out.println("-ERR Authentication required");
-            return;
-        }
-        for (int i = 0; i < deletionFlags.size(); i++) {
-            deletionFlags.set(i, false);
-        }
-        out.println("+OK Deletion marks reset");
-    }
 
     private void handleQuit() {
-        for (int i = deletionFlags.size() - 1; i >= 0; i--) {
-            if (deletionFlags.get(i)) {
-                File emailFile = emails.get(i);
-                if (emailFile.delete()) {
-                    System.out.println("Deleted email: " + emailFile.getAbsolutePath());
-                    emails.remove(i);
-                    deletionFlags.remove(i);
-                } else {
-                    System.err.println("Failed to delete email: " + emailFile.getAbsolutePath());
-                }
-            }
+        // If user is not authenticated, just exit
+        if (!authenticated) {
+            out.println("+OK POP3 server signing off");
+            return;
         }
-        out.println("+OK POP3 server signing off");
+
+        String jdbcUrl = "jdbc:mysql://localhost:3306/maildb";
+        String dbUser = "root";
+        String dbPassword = "";
+
+        // Construct user's email address
+        String recipientEmail = username + "@example.com";
+
+        // SQL to permanently delete all soft-deleted messages for the authenticated user
+        String sql = "DELETE FROM emails WHERE recipient_email = ? AND is_deleted = 1";
+
+        try (Connection con = DriverManager.getConnection(jdbcUrl, dbUser, dbPassword);
+             PreparedStatement pst = con.prepareStatement(sql)) {
+
+            pst.setString(1, recipientEmail);
+            int deletedCount = pst.executeUpdate();
+
+            out.println("+OK " + deletedCount + " message(s) deleted. Goodbye");
+
+        } catch (SQLException e) {
+            e.printStackTrace();
+            out.println("-ERR Error during cleanup. Goodbye anyway");
+        }
     }
+
     private boolean userExistsInDatabase(String username) {
         String jdbcUrl = "jdbc:mysql://localhost:3306/maildb?serverTimezone=UTC";
         String dbUser = "root";
         String dbPassword = "";
-        String sql = "SELECT * FROM users WHERE username = ?";
+        String sql = "SELECT 1 FROM users WHERE username = ? LIMIT 1";
 
         try (Connection con = DriverManager.getConnection(jdbcUrl, dbUser, dbPassword);
              PreparedStatement stmt = con.prepareStatement(sql)) {
 
             stmt.setString(1, username);
             ResultSet rs = stmt.executeQuery();
-            return rs.next();
+            boolean exists = rs.next();
+            rs.close();
+            return exists;
 
         } catch (SQLException e) {
             System.err.println("Database error during POP3 user check: " + e.getMessage());
             return false;
         }
     }
+
 
 }

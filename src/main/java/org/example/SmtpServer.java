@@ -2,14 +2,13 @@ package org.example;
 import java.sql.*;
 import java.io.*;
 import java.net.*;
-import java.text.SimpleDateFormat;
 import java.util.*;
-import java.rmi.registry.LocateRegistry;
-import java.rmi.registry.Registry;
+import java.util.Base64;
+import java.io.UnsupportedEncodingException;
 
 public class SmtpServer {
     // Use a custom port (2525) to avoid needing privileged ports.
-    private static final int PORT = 2525;
+    private static final int PORT = 25;
 
     public static void main(String[] args) {
         try (ServerSocket serverSocket = new ServerSocket(PORT)) {
@@ -37,7 +36,7 @@ class SmtpSession extends Thread {
         HELO_RECEIVED,      // HELO/EHLO received; ready for MAIL FROM.
         MAIL_FROM_SET,      // MAIL FROM processed; ready for RCPT TO.
         RCPT_TO_SET,        // At least one RCPT TO received; ready for DATA.
-        DATA_RECEIVING      // DATA command received; reading email content.
+        WAITING_MAIL_FROM, DATA_RECEIVING      // DATA command received; reading email content.
     }
 
     private SmtpState state;
@@ -60,7 +59,7 @@ class SmtpSession extends Thread {
             in  = new BufferedReader(new InputStreamReader(socket.getInputStream()));
             out = new PrintWriter(socket.getOutputStream(), true);
             // Initial greeting includes a note to authenticate.
-            out.println("220 smtp.example.com Service Ready. Please authenticate using: AUTH <username> <password>");
+            out.println("220 smtp.example.com Service Ready");
 
             String line;
             while ((line = in.readLine()) != null) {
@@ -68,11 +67,7 @@ class SmtpSession extends Thread {
                 String command = extractToken(line).toUpperCase();
                 String argument = extractArgument(line);
 
-                // If not authenticated, only allow AUTH command.
-                if (state == SmtpState.NOT_AUTHENTICATED && !command.equals("AUTH")) {
-                    out.println("530 Authentication required");
-                    continue;
-                }
+                // If not authenticated, only allow AUTH commands
 
                 switch (command) {
                     case "HELO":
@@ -118,30 +113,7 @@ class SmtpSession extends Thread {
         }
     }
 
-    private void handleAuth(String arg) {
-        // Expected format: "username password"
-        String[] tokens = arg.split("\\s+");
-        if (tokens.length != 2) {
-            out.println("501 Syntax error. Use: AUTH <username> <password>");
-            return;
-        }
-        String user = tokens[0];
-        String pass = tokens[1];
-        try {
-            Registry registry = LocateRegistry.getRegistry("localhost", 1099);
-            AuthService authService = (AuthService) registry.lookup("AuthService");
-            if (authService.authenticate(user, pass)) {
-                state = SmtpState.AUTHENTICATED;
-                authUsername = user;
-                out.println("235 Authentication successful");
-            } else {
-                out.println("535 Authentication credentials invalid");
-            }
-        } catch (Exception e) {
-            out.println("454 Temporary authentication failure");
-            e.printStackTrace();
-        }
-    }
+
 
     private void handleHelo(String arg) {
         state = SmtpState.HELO_RECEIVED;
@@ -165,17 +137,12 @@ class SmtpSession extends Thread {
             return;
         }
 
+        // Extract local part before '@'
         String localPart = email.split("@")[0];
 
-        // Check that the sender exists in the database
+        // Check if user with this username exists in DB
         if (!userExistsInDatabase(localPart)) {
             out.println("550 Sender not recognized");
-            return;
-        }
-
-        // Ensure the sender is the authenticated user
-        if (!localPart.equalsIgnoreCase(authUsername)) {
-            out.println("550 Sender not authorized. Use the authenticated username.");
             return;
         }
 
@@ -183,6 +150,7 @@ class SmtpSession extends Thread {
         state = SmtpState.MAIL_FROM_SET;
         out.println("250 OK");
     }
+
 
 
     private void handleRcptTo(String arg) {
@@ -203,9 +171,10 @@ class SmtpSession extends Thread {
             return;
         }
 
+        // Extract the local part of the email (before '@')
         String localPart = email.split("@")[0];
 
-        // Check if the recipient exists
+        // Check if the recipient exists in the database by matching the recipient_email
         if (!userExistsInDatabase(localPart)) {
             out.println("550 Recipient address not found");
             return;
@@ -217,14 +186,50 @@ class SmtpSession extends Thread {
     }
 
 
+
     private void handleData() {
         if (state != SmtpState.RCPT_TO_SET || recipients.isEmpty()) {
             out.println("503 Bad sequence of commands");
             return;
         }
+
         state = SmtpState.DATA_RECEIVING;
         out.println("354 Start mail input; end with <CRLF>.<CRLF>");
+
+        StringBuilder messageContent = new StringBuilder();
+        boolean endOfMessage = false;
+
+        // Reading the email content from the client
+        try {
+            while (!endOfMessage) {
+                String line = readLine();  // Use readLine() to capture the client's input
+                if (line.equals(".")) {
+                    endOfMessage = true; // End the message when a single dot is entered
+                } else {
+                    messageContent.append(line).append("\r\n"); // Add the line to the message content
+                }
+            }
+
+            // After the message body is received, we process and store it
+            storeEmail(messageContent.toString());  // Store the email
+        } catch (IOException e) {
+            out.println("550 Failed to store email");
+            e.printStackTrace();
+        }
     }
+
+    private String readLine() throws IOException {
+        // Use the InputStream of your socket to read data from the client
+        BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+
+        // Read one line from the input stream
+        String line = reader.readLine();
+
+        // Return the read line
+        return line;
+    }
+
+
 
     private void handleQuit() {
         out.println("221 smtp.example.com Service closing transmission channel");
@@ -250,40 +255,158 @@ class SmtpSession extends Thread {
         }
         return null;
     }
+    private String extractSubject(String data) {
+        // Find the headers part (before the empty line)
+        int headerEndIndex = data.indexOf("\r\n\r\n");  // Locate the blank line separating headers and body
+        if (headerEndIndex == -1) {
+            return null;  // No body found, could be invalid data
+        }
 
+        String headers = data.substring(0, headerEndIndex);  // Extract headers part
+        String[] lines = headers.split("\r\n");  // Split headers into lines
+
+        // Look for the Subject header
+        for (String line : lines) {
+            if (line.toLowerCase().startsWith("subject:")) {
+                // Extract the subject and check if it needs decoding
+                String subject = line.substring(8).trim();  // Remove "Subject:" and any extra spaces
+
+                // Check if the subject is base64 encoded (common for non-ASCII subjects)
+                if (subject.contains("=?UTF-8?B?")) {
+                    // Remove the encoding part (e.g., =?UTF-8?B?...)
+                    String base64EncodedSubject = subject.split("\\?B\\?")[1].split("\\?=")[0];
+                    return decodeBase64Subject(base64EncodedSubject);
+                }
+                return subject;  // If no encoding, return as is
+            }
+        }
+
+        return null;  // No subject found
+    }
+    // Base64 decoding method
+    private String decodeBase64Subject(String encodedSubject) {
+        try {
+            // Decode the base64 string and return the result as UTF-8
+            return new String(Base64.getDecoder().decode(encodedSubject), "UTF-8");
+        } catch (IllegalArgumentException | UnsupportedEncodingException e) {
+            e.printStackTrace();
+            return encodedSubject;  // If decoding fails, return the raw subject
+        }
+    }
     // Store the email in the authenticated user's directory.
+// Store the email after DATA command
     private void storeEmail(String data) {
-        // Connexion à la base de données MySQL (adapté pour XAMPP : username = "root", password = "")
-        String jdbcUrl = "jdbc:mysql://localhost:3306/maildb";
+        String body = extractEmailBody(data);
+        String subject = extractSubject(data); // fixed typo from extracttSubject
+
+        String jdbcUrl = "jdbc:mysql://localhost:3306/maildb?serverTimezone=UTC";
         String dbUser = "root";
-        String dbPassword = ""; // par défaut sous XAMPP, il n'y a pas de mot de passe
-        String sql = "INSERT INTO emails (sender, recipients, subject, content, date_sent, recipient) VALUES (?, ?, ?, ?, ?, ?)";
+        String dbPassword = "";
+        String sql = "INSERT INTO emails (sender, content, date_sent, recipient_email, subject) VALUES (?, ?, ?, ?, ?)";
 
         try (Connection con = DriverManager.getConnection(jdbcUrl, dbUser, dbPassword);
              PreparedStatement pst = con.prepareStatement(sql)) {
 
-            // Pour cet exemple, nous fixons le sujet à "Test Email".
-            pst.setString(1, sender);
-            pst.setString(2, String.join(", ", recipients));
-            pst.setString(3, "Test Email");  // idéalement extraire le sujet du contenu DATA
-            pst.setString(4, data);
-            pst.setTimestamp(5, new Timestamp(System.currentTimeMillis()));
-            // Pour simplifier, nous utilisons le premier destinataire comme identifiant pour la récupération
-            pst.setString(6, recipients.get(0));
-
-            int rowsAffected = pst.executeUpdate();
-            if (rowsAffected > 0) {
-                System.out.println("Email stored in database successfully.");
-                out.println("250 OK: Message accepted for delivery");
-            } else {
-                System.out.println("Failed to store email in database.");
-                out.println("550 Failed to store email");
+            if (sender == null || recipients.isEmpty()) {
+                out.println("550 Missing sender or recipient");
+                return;
             }
+
+            for (String recipientEmail : recipients) {
+                pst.setString(1, sender); // FROM MAIL FROM
+                pst.setString(2, body);   // email body from DATA
+                pst.setTimestamp(3, new Timestamp(System.currentTimeMillis()));
+                pst.setString(4, recipientEmail); // FROM RCPT TO
+                pst.setString(5, subject);        // From DATA
+
+                pst.executeUpdate();
+            }
+
+            System.out.println("Email stored in database successfully.");
+            out.println("250 OK: Message accepted for delivery");
+
+            // ✅ Reset state for next email
+            sender = null;
+            recipients.clear();
+            state = SmtpState.WAITING_MAIL_FROM;
+
         } catch (SQLException ex) {
             ex.printStackTrace();
-            out.println("550 Failed to store email");
+            out.println("550 Failed to store email: " + ex.getMessage());
         }
     }
+
+
+    // Helper function to extract the subject from the email data
+    private String extracttSubject(String data) {
+        String[] lines = data.split("\r\n");
+        for (String line : lines) {
+            if (line.startsWith("Subject:")) {
+                return line.substring(8).trim(); // Get subject after "Subject: "
+            }
+        }
+        return "";  // Return empty if subject not found
+    }
+
+
+    // Helper function to extract the email body (ignores headers like Subject, From, To, etc.)
+    private String extractEmailBody(String data) {
+        String[] lines = data.split("\r\n");
+        StringBuilder body = new StringBuilder();
+
+        boolean isBody = false;
+        for (String line : lines) {
+            if (line.isEmpty()) {  // Empty line indicates the start of the body
+                isBody = true;
+                continue;
+            }
+            if (isBody) {
+                body.append(line).append("\r\n");
+            }
+        }
+
+        return body.toString().trim();  // Remove the last \r\n (if any)
+    }
+
+    // Helper function to extract the sender from the email data
+    private String extractSender(String data) {
+        String[] lines = data.split("\r\n");
+        for (String line : lines) {
+            if (line.startsWith("From:")) {
+                return line.substring(5).trim(); // Get email after "From: "
+            }
+        }
+        return "";  // Return empty if sender not found
+    }
+
+    // Helper function to extract the recipient from the email data
+    private String extractRecipient(String data) {
+        String[] lines = data.split("\r\n");
+        for (String line : lines) {
+            if (line.startsWith("To:")) {
+                return line.substring(3).trim(); // Get email after "To: "
+            }
+        }
+        return "";  // Return empty if recipient not found
+    }
+
+
+    // Helper function to extract the body of the email from the data
+    private String extractBodyFromData(String data) {
+        // Split by the first blank line, which separates headers and body
+        int bodyStartIndex = data.indexOf("\r\n\r\n");
+
+        if (bodyStartIndex != -1) {
+            // Return the content after the blank line (which is the body)
+            return data.substring(bodyStartIndex + 4).trim();
+        } else {
+            // No blank line, return the whole content (although this should not happen)
+            return data;
+        }
+    }
+
+
+
     private boolean userExistsInDatabase(String username) {
         String jdbcUrl = "jdbc:mysql://localhost:3306/maildb?serverTimezone=UTC";
         String dbUser = "root";

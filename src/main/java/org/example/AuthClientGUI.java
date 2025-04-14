@@ -117,11 +117,11 @@ public class AuthClientGUI extends JFrame {
         JButton button = new JButton(text);
         button.setFont(new Font("Arial", Font.BOLD, 14));
         button.setPreferredSize(new Dimension(100, 40));
-        button.setBackground(new Color(65, 105, 225));  // Royal Blue color
+        button.setBackground(new Color(255, 103, 0));  // Royal Blue color
         button.setForeground(Color.WHITE);
         button.setFocusPainted(false);
         button.setCursor(new Cursor(Cursor.HAND_CURSOR));
-        button.setBorder(BorderFactory.createLineBorder(new Color(50, 90, 150), 2));
+        button.setBorder(BorderFactory.createLineBorder(new Color(255, 103, 50), 2));
         return button;
     }
 
