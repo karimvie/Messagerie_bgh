@@ -26,6 +26,7 @@ public class AuthServiceImpl extends UnicastRemoteObject implements AuthService 
 
     @Override
     public boolean authenticate(String username, String password) {
+
         String jdbcUrl = "jdbc:mysql://localhost:3306/maildb";
         String dbUser = "root";
         String dbPassword = "";

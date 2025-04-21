@@ -239,6 +239,8 @@ class Pop3Session extends Thread {
 
 
     private void handleRetr(String msgId) {
+        long startTime = System.currentTimeMillis();
+
         if (!authenticated) {
             out.println("-ERR Authentication required");
             return;
@@ -295,6 +297,9 @@ class Pop3Session extends Thread {
             ex.printStackTrace();
             out.println("-ERR Server error during message retrieval");
         }
+        long endTime = System.currentTimeMillis();
+        System.out.println("[POP3] Temps de réponse pour handleRetr : " + (endTime - startTime) + " ms");
+
     }
 
 

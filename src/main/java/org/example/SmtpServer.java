@@ -296,6 +296,7 @@ class SmtpSession extends Thread {
     // Store the email in the authenticated user's directory.
 // Store the email after DATA command
     private void storeEmail(String data) {
+        long startTime = System.currentTimeMillis();
         String body = extractEmailBody(data);
         String subject = extractSubject(data); // fixed typo from extracttSubject
 
@@ -334,6 +335,9 @@ class SmtpSession extends Thread {
             ex.printStackTrace();
             out.println("550 Failed to store email: " + ex.getMessage());
         }
+        long endTime = System.currentTimeMillis();
+        System.out.println("[SMTP] Temps de réponse pour storeEmail : " + (endTime - startTime) + " ms");
+
     }
 
 
