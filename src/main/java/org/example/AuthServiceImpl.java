@@ -81,6 +81,7 @@ public class AuthServiceImpl extends UnicastRemoteObject implements AuthService 
                 return false;
             }
         } catch (SQLException ex) {
+<<<<<<< HEAD
         System.err.println("❌ SQL error during createUser:");
         System.err.println("→ Message: " + ex.getMessage());
         System.err.println("→ SQLState: " + ex.getSQLState());
@@ -88,6 +89,11 @@ public class AuthServiceImpl extends UnicastRemoteObject implements AuthService 
         ex.printStackTrace();
         return false;
     }
+=======
+            ex.printStackTrace();
+            return false;
+        }
+>>>>>>> 293e3d8e9d382c015a22abd503c2ddd6e652a4fa
     }
 
     private String hashPassword(String password) {
